@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8">
+<title>PulseGuard AI Camera</title>
+<style>
+* { box-sizing: border-box; }
+body { background:#101827; color:#fff; font-family:Arial,sans-serif; padding:16px; text-align:center; margin:0; }
+main { max-width:760px; margin:auto; }
+h1 { color:#6ee7b7; }
+p { color:#cbd5e1; line-height:1.5; }
+button { padding:13px 18px; margin:7px; border:0; border-radius:10px; background:#6ee7b7; color:#10251e; font-weight:bold; font-size:16px; }
+button:disabled { opacity:.55; }
+#stage { position:relative; width:100%; max-width:640px; margin:16px auto; background:#202b3d; border-radius:12px; overflow:hidden; min-height:160px; }
+video { display:block; width:100%; height:auto; }
+canvas { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+#count { font-size:22px; font-weight:bold; color:#6ee7b7; }
+.note { font-size:13px; color:#aab8cb; }
+</style>
+</head>
+<body>
+<main>
+<h1>🚦 PulseGuard AI</h1>
+<p><b>Live Vehicle Detection Prototype</b></p>
+<p id="status">Loading AI model. Keep this page open and connected to the internet.</p>
+<button id="start" disabled>Start Camera</button>
+<button id="stop">Stop Camera</button>
+<div id="stage">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="overlay"></canvas>
+</div>
+<p id="count">Detected cars: 0</p>
+<p id="details">Waiting for camera...</p>
+<p class="note">Prototype only. General-purpose models may not recognise small toy cars reliably.</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script>
+const video=document.getElementById("video");
+const canvas=document.getElementById("overlay");
+const ctx=canvas.getContext("2d");
+const statusText=document.getElementById("status");
+const countText=document.getElementById("count");
+const details=document.getElementById("details");
+const startBtn=document.getElementById("start");
+let model=null, stream=null, running=false, busy=false, lastRun=0;
+
+async function loadModel(){
+  try{
+    statusText.textContent="Loading AI model...";
+    if(!window.cocoSsd) throw new Error("AI library did not load. Check internet and reload.");
+    model=await cocoSsd.load();
+    statusText.textContent="AI ready. Tap Start Camera.";
+    startBtn.disabled=false;
+  }catch(err){
+    statusText.textContent="AI model could not load: "+err.message;
+  }
+}
+startBtn.addEventListener("click", async()=>{
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error("This page does not have camera access. Open its HTTPS website directly in Chrome, not inside an editor preview.");
+    }
+    stream=await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{facingMode:{ideal:"environment"}}
+    });
+    video.srcObject=stream;
+    await video.play();
+    running=true;
+    startBtn.disabled=true;
+    statusText.textContent="Camera running — detecting objects...";
+    requestAnimationFrame(detect);
+  }catch(err){
+    statusText.textContent="Camera error: "+err.name+" — "+err.message;
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    stream=null;
+  }
+});
+document.getElementById("stop").addEventListener("click",()=>{
+  running=false;
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  stream=null; video.srcObject=null;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  countText.textContent="Detected cars: 0";
+  details.textContent="Camera stopped.";
+  statusText.textContent=model?"AI ready. Tap Start Camera.":"AI model not loaded.";
+  startBtn.disabled=!model;
+});
+async function detect(timestamp){
+  if(!running) return;
+  requestAnimationFrame(detect);
+  if(busy || timestamp-lastRun<450 || video.readyState<2 || !video.videoWidth) return;
+  busy=true; lastRun=timestamp;
+  try{
+    const w=video.videoWidth,h=video.videoHeight;
+    if(canvas.width!==w || canvas.height!==h){canvas.width=w;canvas.height=h;}
+    const predictions=await model.detect(video);
+    if(!running) return;
+    ctx.clearRect(0,0,w,h);
+    const cars=predictions.filter(p=>p.class==="car");
+    for(const p of cars){
+      const [x,y,bw,bh]=p.bbox;
+      ctx.strokeStyle="#6ee7b7"; ctx.lineWidth=Math.max(2,w/200);
+      ctx.strokeRect(x,y,bw,bh);
+      ctx.fillStyle="#6ee7b7"; ctx.font=`${Math.max(14,w/35)}px Arial`;
+      ctx.fillText(`Car ${Math.round(p.score*100)}%`,x,Math.max(18,y-5));
+    }
+    countText.textContent=`Detected cars: ${cars.length}`;
+    details.textContent=cars.length
+      ?"AI found car-labelled objects in this frame."
+      :"No car-labelled objects found in this frame. Toy cars may be too small for this model.";
+  }catch(err){
+    statusText.textContent="Detection error: "+err.message;
+  }finally{busy=false;}
+}
+loadModel();
+</script>
+</body>
+</html>
